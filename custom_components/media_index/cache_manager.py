@@ -99,6 +99,35 @@ class CacheManager:
             )
         """)
         
+        # Create indexes for commonly queried EXIF fields
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_exif_date_taken ON exif_data(date_taken)
+        """)
+        
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_exif_location_city ON exif_data(location_city)
+        """)
+        
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_exif_location_country ON exif_data(location_country)
+        """)
+        
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_exif_location_name ON exif_data(location_name)
+        """)
+        
+        # Composite index for location + date queries (e.g., "photos from Paris in 2023")
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_exif_location_date 
+            ON exif_data(location_city, date_taken)
+        """)
+        
+        # Index for GPS coordinate queries (nearby photos)
+        await self._db.execute("""
+            CREATE INDEX IF NOT EXISTS idx_exif_gps_coords 
+            ON exif_data(latitude, longitude)
+        """)
+        
         await self._db.execute("""
             CREATE TABLE IF NOT EXISTS geocode_cache (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -256,6 +285,28 @@ class CacheManager:
         ) as cursor:
             row = await cursor.fetchone()
             return row[0] if row else 0
+    
+    async def remove_file(self, file_path: str) -> bool:
+        """Remove a file from the cache.
+        
+        Args:
+            file_path: Full path to file
+            
+        Returns:
+            True if file was removed, False otherwise
+        """
+        try:
+            # Remove from media_files table
+            await self._db.execute(
+                "DELETE FROM media_files WHERE path = ?",
+                (file_path,)
+            )
+            
+            await self._db.commit()
+            return True
+        except Exception as err:
+            _LOGGER.error("Failed to remove file %s from cache: %s", file_path, err)
+            return False
     
     async def record_scan(self, folder_path: str, scan_type: str) -> int:
         """Record start of scan.
