@@ -289,10 +289,27 @@ class CacheManager:
     async def add_exif_data(self, file_id: int, exif_data: Dict[str, Any]) -> None:
         """Add or update EXIF data for a file.
         
+        Preserves existing geocoded location data to avoid re-geocoding on every scan.
+        
         Args:
             file_id: ID of the file in media_files table
             exif_data: Dictionary with EXIF metadata
         """
+        # Check if EXIF data already exists with geocoded location
+        existing_location = None
+        async with self._db.execute("""
+            SELECT location_name, location_city, location_country
+            FROM exif_data
+            WHERE file_id = ?
+        """, (file_id,)) as cursor:
+            row = await cursor.fetchone()
+            if row and row[1]:  # If location_city is populated
+                existing_location = {
+                    'location_name': row[0],
+                    'location_city': row[1],
+                    'location_country': row[2]
+                }
+        
         await self._db.execute("""
             INSERT OR REPLACE INTO exif_data 
             (file_id, camera_make, camera_model, date_taken, latitude, longitude,
@@ -306,9 +323,10 @@ class CacheManager:
             exif_data.get('date_taken'),
             exif_data.get('latitude'),
             exif_data.get('longitude'),
-            None,  # location_name (will be filled by geocoding)
-            None,  # location_city (will be filled by geocoding)
-            None,  # location_country (will be filled by geocoding)
+            # Preserve existing geocoded location if available
+            existing_location['location_name'] if existing_location else None,
+            existing_location['location_city'] if existing_location else None,
+            existing_location['location_country'] if existing_location else None,
             exif_data.get('iso'),
             exif_data.get('aperture'),
             exif_data.get('shutter_speed'),
@@ -317,6 +335,21 @@ class CacheManager:
         ))
         
         await self._db.commit()
+    
+    async def has_geocoded_location(self, file_id: int) -> bool:
+        """Check if a file already has geocoded location data.
+        
+        Args:
+            file_id: ID of the file in media_files table
+            
+        Returns:
+            True if location_city is populated, False otherwise
+        """
+        async with self._db.execute("""
+            SELECT location_city FROM exif_data WHERE file_id = ?
+        """, (file_id,)) as cursor:
+            row = await cursor.fetchone()
+            return row is not None and row[0] is not None
     
     async def get_geocode_cache(self, latitude: float, longitude: float) -> Optional[Dict[str, str]]:
         """Get cached geocoding data for coordinates.

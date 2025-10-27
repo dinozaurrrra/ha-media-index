@@ -179,21 +179,27 @@ class MediaScanner:
                                 await self.cache.add_exif_data(file_id, exif_data)
                                 _LOGGER.debug("Extracted EXIF for: %s", metadata['filename'])
                                 
-                                # Geocode GPS coordinates if available and enabled
+                                # Geocode GPS coordinates if available, enabled, and not already geocoded
                                 has_coords = exif_data.get('latitude') and exif_data.get('longitude')
+                                
+                                # Check if this file already has geocoded location
+                                already_geocoded = await self.cache.has_geocoded_location(file_id)
+                                
                                 _LOGGER.debug(
-                                    "Geocoding check for %s: enabled=%s, service=%s, has_coords=%s (lat=%s, lon=%s)",
+                                    "Geocoding check for %s: enabled=%s, service=%s, has_coords=%s, already_geocoded=%s (lat=%s, lon=%s)",
                                     metadata['filename'],
                                     self.enable_geocoding,
                                     self.geocode_service is not None,
                                     has_coords,
+                                    already_geocoded,
                                     exif_data.get('latitude'),
                                     exif_data.get('longitude')
                                 )
                                 
                                 if (self.enable_geocoding and 
                                     self.geocode_service and 
-                                    has_coords):
+                                    has_coords and 
+                                    not already_geocoded):
                                     
                                     lat = exif_data['latitude']
                                     lon = exif_data['longitude']
@@ -206,12 +212,15 @@ class MediaScanner:
                                     if cached_location:
                                         # Use cached location
                                         await self.cache.update_exif_location(file_id, cached_location)
-                                        _LOGGER.debug(
-                                            "Used cached geocode for (%s, %s): %s", 
-                                            lat, lon, cached_location.get('location_name')
+                                        _LOGGER.info(
+                                            "Cache HIT for (%s, %s): %s, %s", 
+                                            round(lat, 3), round(lon, 3),
+                                            cached_location.get('location_city'),
+                                            cached_location.get('location_country')
                                         )
                                     else:
                                         # Fetch from geocoding service
+                                        _LOGGER.info("Cache MISS for (%s, %s) - calling Nominatim API", round(lat, 3), round(lon, 3))
                                         location_data = await self.geocode_service.reverse_geocode(lat, lon)
                                         
                                         if location_data:
