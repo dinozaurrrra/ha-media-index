@@ -7,7 +7,7 @@ import voluptuous as vol
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
-from homeassistant.core import HomeAssistant, ServiceCall
+from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers.typing import ConfigType
 import homeassistant.helpers.config_validation as cv
 
@@ -20,6 +20,10 @@ from .const import (
     CONF_GEOCODE_ENABLED,
     DEFAULT_ENABLE_WATCHER,
     DEFAULT_GEOCODE_ENABLED,
+    SERVICE_GET_RANDOM_ITEMS,
+    SERVICE_GET_FILE_METADATA,
+    SERVICE_GEOCODE_FILE,
+    SERVICE_SCAN_FOLDER,
 )
 from .cache_manager import CacheManager
 from .scanner import MediaScanner
@@ -29,11 +33,6 @@ from .geocoding import GeocodeService
 _LOGGER = logging.getLogger(__name__)
 
 PLATFORMS: list[Platform] = [Platform.SENSOR]
-
-# Service names
-SERVICE_GET_RANDOM_ITEMS = "get_random_items"
-SERVICE_GET_FILE_METADATA = "get_file_metadata"
-SERVICE_SCAN_FOLDER = "scan_folder"
 
 # Service schemas
 SERVICE_GET_RANDOM_ITEMS_SCHEMA = vol.Schema({
@@ -46,6 +45,12 @@ SERVICE_GET_RANDOM_ITEMS_SCHEMA = vol.Schema({
 
 SERVICE_GET_FILE_METADATA_SCHEMA = vol.Schema({
     vol.Required("file_path"): cv.string,
+})
+
+SERVICE_GEOCODE_FILE_SCHEMA = vol.Schema({
+    vol.Optional("file_id"): cv.positive_int,
+    vol.Optional("latitude"): vol.Coerce(float),
+    vol.Optional("longitude"): vol.Coerce(float),
 })
 
 SERVICE_SCAN_FOLDER_SCHEMA = vol.Schema({
@@ -158,6 +163,71 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
             _LOGGER.warning("File not found in index: %s", file_path)
             return {"error": "File not found"}
     
+    async def handle_geocode_file(call):
+        """Handle geocode_file service call for progressive geocoding."""
+        cache_manager = hass.data[DOMAIN][entry.entry_id]["cache_manager"]
+        geocode_service = hass.data[DOMAIN][entry.entry_id].get("geocode_service")
+        
+        if not geocode_service:
+            _LOGGER.error("Geocoding service not enabled")
+            return {"error": "Geocoding not enabled"}
+        
+        file_id = call.data.get("file_id")
+        lat = call.data.get("latitude")
+        lon = call.data.get("longitude")
+        
+        # Get coordinates from file_id if not provided
+        if file_id and not (lat and lon):
+            file_data = await cache_manager.get_file_by_id(file_id)
+            if not file_data:
+                return {"error": "File not found"}
+            
+            # Get EXIF data for coordinates
+            exif_data = await cache_manager.get_exif_by_file_id(file_id)
+            if not exif_data or not exif_data.get("latitude"):
+                return {"error": "File has no GPS coordinates"}
+            
+            lat = exif_data["latitude"]
+            lon = exif_data["longitude"]
+        
+        if not (lat and lon):
+            return {"error": "Either file_id or latitude/longitude required"}
+        
+        _LOGGER.info("Progressive geocoding request for (%s, %s)", lat, lon)
+        
+        # 1. Check geocode cache first (fast)
+        cached_location = await cache_manager.get_geocode_cache(lat, lon)
+        if cached_location:
+            _LOGGER.info("Cache HIT for (%s, %s): %s", round(lat, 3), round(lon, 3), cached_location.get('location_city'))
+            # Update exif_data table with cached result
+            if file_id:
+                await cache_manager.update_exif_location(file_id, cached_location)
+            return cached_location
+        
+        # 2. Call Nominatim API (slow, rate-limited)
+        _LOGGER.info("Cache MISS for (%s, %s) - calling Nominatim API", round(lat, 3), round(lon, 3))
+        location_data = await geocode_service.reverse_geocode(lat, lon)
+        
+        if not location_data:
+            return {"error": "Geocoding failed"}
+        
+        # 3. Cache the result
+        await cache_manager.add_geocode_cache(lat, lon, location_data)
+        
+        # 4. Update exif_data table with new location
+        if file_id:
+            await cache_manager.update_exif_location(file_id, location_data)
+        
+        _LOGGER.info(
+            "Geocoded (%s, %s) to: %s, %s",
+            lat, lon,
+            location_data.get('location_city'),
+            location_data.get('location_country')
+        )
+        
+        # 5. Return location data to caller
+        return location_data
+    
     async def handle_scan_folder(call):
         """Handle scan_folder service call."""
         scanner = hass.data[DOMAIN][entry.entry_id]["scanner"]
@@ -183,6 +253,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         SERVICE_GET_RANDOM_ITEMS,
         handle_get_random_items,
         schema=SERVICE_GET_RANDOM_ITEMS_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
     )
     
     hass.services.async_register(
@@ -190,6 +261,15 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         SERVICE_GET_FILE_METADATA,
         handle_get_file_metadata,
         schema=SERVICE_GET_FILE_METADATA_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GEOCODE_FILE,
+        handle_geocode_file,
+        schema=SERVICE_GEOCODE_FILE_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
     )
     
     hass.services.async_register(
@@ -197,9 +277,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
         SERVICE_SCAN_FOLDER,
         handle_scan_folder,
         schema=SERVICE_SCAN_FOLDER_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
     )
     
-    _LOGGER.info("Registered %d services", 3)
+    _LOGGER.info("Registered 4 services")
 
     # Register update listener for config changes
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))

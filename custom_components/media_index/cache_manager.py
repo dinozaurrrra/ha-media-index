@@ -506,7 +506,9 @@ class CacheManager:
         date_from: str | None = None,
         date_to: str | None = None
     ) -> list[dict]:
-        """Get random media files with optional filters.
+        """Get random media files with optional filters and EXIF data.
+        
+        Includes geocoding status to enable progressive on-demand geocoding.
         
         Args:
             count: Number of random files to return
@@ -516,25 +518,44 @@ class CacheManager:
             date_to: Filter by date <= this value (YYYY-MM-DD)
             
         Returns:
-            List of file records with metadata
+            List of file records with metadata and EXIF data including:
+            - has_coordinates: bool (GPS data exists)
+            - is_geocoded: bool (location_city populated)
+            - latitude, longitude: float (if has_coordinates)
+            - location_name, location_city, location_country: str (if is_geocoded)
+            - date_taken: timestamp (if available)
         """
-        query = "SELECT * FROM media_files WHERE 1=1"
+        query = """
+            SELECT 
+                m.*,
+                e.date_taken,
+                e.latitude,
+                e.longitude,
+                e.location_name,
+                e.location_city,
+                e.location_country,
+                e.camera_make,
+                e.camera_model
+            FROM media_files m
+            LEFT JOIN exif_data e ON m.id = e.file_id
+            WHERE 1=1
+        """
         params = []
         
         if folder:
-            query += " AND folder LIKE ?"
+            query += " AND m.folder LIKE ?"
             params.append(f"{folder}%")
         
         if file_type:
-            query += " AND file_type = ?"
+            query += " AND m.file_type = ?"
             params.append(file_type.lower())
         
         if date_from:
-            query += " AND DATE(modified_time, 'unixepoch') >= ?"
+            query += " AND DATE(m.modified_time, 'unixepoch') >= ?"
             params.append(str(date_from))
         
         if date_to:
-            query += " AND DATE(modified_time, 'unixepoch') <= ?"
+            query += " AND DATE(m.modified_time, 'unixepoch') <= ?"
             params.append(str(date_to))
         
         query += " ORDER BY RANDOM() LIMIT ?"
@@ -545,7 +566,16 @@ class CacheManager:
         async with self._db.execute(query, tuple(params)) as cursor:
             rows = await cursor.fetchall()
         
-        return [dict(row) for row in rows]
+        # Convert rows to dicts and add geocoding status
+        result = []
+        for row in rows:
+            item = dict(row)
+            # Add progressive geocoding flags
+            item['has_coordinates'] = item.get('latitude') is not None and item.get('longitude') is not None
+            item['is_geocoded'] = item.get('location_city') is not None
+            result.append(item)
+        
+        return result
     
     async def get_file_by_path(self, file_path: str) -> dict | None:
         """Get file metadata by full path.
@@ -579,6 +609,40 @@ class CacheManager:
             file_data['exif'] = dict(exif_row)
         
         return file_data
+    
+    async def get_file_by_id(self, file_id: int) -> dict | None:
+        """Get file metadata by database ID.
+        
+        Args:
+            file_id: Database ID of the file
+            
+        Returns:
+            File record with metadata, or None if not found
+        """
+        async with self._db.execute(
+            "SELECT * FROM media_files WHERE id = ?",
+            (file_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        
+        return dict(row) if row else None
+    
+    async def get_exif_by_file_id(self, file_id: int) -> dict | None:
+        """Get EXIF data for a file by ID.
+        
+        Args:
+            file_id: Database ID of the file
+            
+        Returns:
+            EXIF data dictionary, or None if not found
+        """
+        async with self._db.execute(
+            "SELECT * FROM exif_data WHERE file_id = ?",
+            (file_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+        
+        return dict(row) if row else None
     
     async def close(self) -> None:
         """Close database connection."""

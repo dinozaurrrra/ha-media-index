@@ -59,6 +59,8 @@ DB_NAME: Final = "media_index.db"
 # Services
 SERVICE_SCAN_FOLDER: Final = "scan_folder"
 SERVICE_GET_RANDOM_ITEMS: Final = "get_random_items"
+SERVICE_GET_FILE_METADATA: Final = "get_file_metadata"
+SERVICE_GEOCODE_FILE: Final = "geocode_file"
 SERVICE_FAVORITE_FILE: Final = "favorite_file"
 SERVICE_RATE_FILE: Final = "rate_file"
 SERVICE_DELETE_FILE: Final = "delete_file"

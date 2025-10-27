@@ -54,6 +54,39 @@ get_file_metadata:
       selector:
         text:
 
+geocode_file:
+  name: Geocode File
+  description: Get location name for a file with GPS coordinates (cache-first, on-demand)
+  fields:
+    file_id:
+      name: File ID
+      description: Database ID of the file to geocode
+      required: false
+      selector:
+        number:
+          min: 1
+          mode: box
+    latitude:
+      name: Latitude
+      description: GPS latitude (alternative to file_id)
+      required: false
+      selector:
+        number:
+          min: -90
+          max: 90
+          step: 0.000001
+          mode: box
+    longitude:
+      name: Longitude
+      description: GPS longitude (alternative to file_id)
+      required: false
+      selector:
+        number:
+          min: -180
+          max: 180
+          step: 0.000001
+          mode: box
+
 scan_folder:
   name: Scan Folder
   description: Manually trigger a folder scan
@@ -70,3 +103,4 @@ scan_folder:
       default: false
       selector:
         boolean:
+
