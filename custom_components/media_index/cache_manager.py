@@ -539,6 +539,8 @@ class CacheManager:
             FROM media_files m
             LEFT JOIN exif_data e ON m.id = e.file_id
             WHERE 1=1
+                AND m.folder NOT LIKE '%/_Junk%'
+                AND m.folder NOT LIKE '%/_Edit%'
         """
         params = []
         
