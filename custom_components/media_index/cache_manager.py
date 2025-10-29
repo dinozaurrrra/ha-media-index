@@ -669,15 +669,25 @@ class CacheManager:
         """
         favorite_value = 1 if is_favorite else 0
         
+        # Update media_files table
         async with self._db.execute(
             "UPDATE media_files SET is_favorited = ? WHERE path = ?",
             (favorite_value, file_path)
         ) as cursor:
-            await self._db.commit()
             rows_affected = cursor.rowcount
         
+        # CRITICAL: Also update exif_data table - this is what get_random_files queries!
+        async with self._db.execute(
+            "UPDATE exif_data SET is_favorited = ? WHERE file_path = ?",
+            (favorite_value, file_path)
+        ) as cursor:
+            exif_rows_affected = cursor.rowcount
+        
+        await self._db.commit()
+        
         if rows_affected > 0:
-            _LOGGER.info("Updated favorite status for %s: %s", file_path, is_favorite)
+            _LOGGER.info("Updated favorite status for %s: %s (media_files=%d, exif_data=%d rows)", 
+                        file_path, is_favorite, rows_affected, exif_rows_affected)
             return True
         else:
             _LOGGER.warning("File not found in database: %s", file_path)
