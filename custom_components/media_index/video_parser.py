@@ -173,6 +173,7 @@ class VideoMetadataParser:
             True if rating was written successfully, False otherwise
         """
         import subprocess
+        import shutil
         
         try:
             from pathlib import Path
@@ -181,11 +182,9 @@ class VideoMetadataParser:
             if path.suffix.lower() not in {'.mp4', '.m4v', '.mov'}:
                 return False
             
-            # Check if exiftool is available
-            try:
-                subprocess.run(['exiftool', '-ver'], capture_output=True, check=True)
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                _LOGGER.error("exiftool not found - required for MP4 metadata writing")
+            # Check if exiftool is available using shutil.which (properly checks PATH)
+            if not shutil.which('exiftool'):
+                _LOGGER.error("exiftool not found in PATH - required for MP4 metadata writing")
                 _LOGGER.info("Install with: apk add exiftool (or apt-get install libimage-exiftool-perl on Debian)")
                 return False
             
@@ -201,7 +200,7 @@ class VideoMetadataParser:
             ]
             
             _LOGGER.debug(f"Writing rating {rating} to {file_path} using exiftool")
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=10, check=False)
             
             if result.returncode == 0:
                 _LOGGER.info(f"Successfully wrote rating {rating} to {file_path} (Microsoft:Rating for Windows)")
