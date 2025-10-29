@@ -677,8 +677,11 @@ class CacheManager:
             rows_affected = cursor.rowcount
         
         # CRITICAL: Also update exif_data table - this is what get_random_files queries!
+        # exif_data uses file_id (FK to media_files.id), so we need a subquery
         async with self._db.execute(
-            "UPDATE exif_data SET is_favorited = ? WHERE file_path = ?",
+            """UPDATE exif_data 
+               SET is_favorited = ? 
+               WHERE file_id = (SELECT id FROM media_files WHERE path = ?)""",
             (favorite_value, file_path)
         ) as cursor:
             exif_rows_affected = cursor.rowcount
