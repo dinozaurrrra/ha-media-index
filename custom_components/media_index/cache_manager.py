@@ -635,9 +635,11 @@ class CacheManager:
         # Get base file data
         file_data = dict(row)
         
-        # Get EXIF data if available
+        # Get EXIF data if available (join via file_id)
         async with self._db.execute(
-            "SELECT * FROM exif_data WHERE file_path = ?",
+            """SELECT e.* FROM exif_data e 
+               JOIN media_files m ON e.file_id = m.id 
+               WHERE m.path = ?""",
             (file_path,)
         ) as cursor:
             exif_row = await cursor.fetchone()
