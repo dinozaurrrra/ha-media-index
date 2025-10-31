@@ -43,12 +43,42 @@ class VideoMetadataParser:
             
             # Extract creation date
             # Try multiple fields where creation date might be stored
+            # MP4 files can store dates in various atoms/tags
             creation_date = None
-            if '©day' in video:  # Copyright Date (often used for creation date)
+            
+            # Try common creation date fields in order of preference:
+            # 1. Creation date from QuickTime metadata
+            if hasattr(video, 'tags') and video.tags:
+                # com.apple.quicktime.creationdate - Most reliable for iPhone/Apple devices
+                if 'com.apple.quicktime.creationdate' in video:
+                    creation_date = video['com.apple.quicktime.creationdate'][0]
+            
+            # 2. Copyright date (©day) - Sometimes used for creation
+            if not creation_date and '©day' in video:
                 creation_date = video['©day'][0] if video['©day'] else None
             
+            # 3. Try to get creation time from file's internal atoms
+            # mutagen MP4 objects have an 'info' attribute with creation_time
+            if not creation_date and hasattr(video, 'info') and hasattr(video.info, 'creation_time'):
+                # creation_time is usually a Unix timestamp integer
+                creation_time = video.info.creation_time
+                if creation_time and creation_time > 0:
+                    # Convert Unix timestamp to datetime string
+                    try:
+                        dt = datetime.fromtimestamp(creation_time)
+                        creation_date = dt.strftime('%Y-%m-%d %H:%M:%S')
+                    except (ValueError, OSError):
+                        pass
+            
             if creation_date:
-                result['date_taken'] = VideoMetadataParser._parse_datetime(creation_date)
+                parsed_date = VideoMetadataParser._parse_datetime(creation_date)
+                if parsed_date:
+                    # Convert to Unix timestamp for consistency with EXIF parser
+                    try:
+                        dt = datetime.strptime(parsed_date, '%Y-%m-%d %H:%M:%S')
+                        result['date_taken'] = int(dt.timestamp())
+                    except ValueError:
+                        result['date_taken'] = None
             
             # Extract GPS coordinates from XMP if available
             # MP4 files can store GPS in com.apple.quicktime.location.ISO6709 or XMP
