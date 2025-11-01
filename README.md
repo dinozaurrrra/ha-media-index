@@ -237,17 +237,21 @@ To reset the database, delete this file and trigger a rescan.
 
 ### Multi-Instance Support
 
-**⚠️ Services currently support single instance only.**
+✅ **Full multi-instance support with target selectors**
 
-While you can configure multiple integration instances (e.g., separate folders for Photos and Videos), services will only operate on the **last configured instance**. This is a known limitation that will be addressed in a future update by implementing target selectors.
+You can configure multiple integration instances (e.g., separate folders for Photos and Videos) and services will work with all instances using target selectors:
 
-**Workaround:**
-- Use a single integration instance that covers all your media folders
-- Configure multiple folders via the `watched_folders` option
+**Usage:**
+```yaml
+service: media_index.restore_edited_files
+target:
+  entity_id: sensor.media_index_photos_total_files
+```
 
-**Planned Fix:**
-- Add target selector support to all services (like the card uses)
-- Allow services to specify which instance via `target: entity_id`
+**Benefits:**
+- Separate instances for different media collections
+- Independent configuration per instance (different watched folders, settings)
+- Services can target specific instances or all instances
 
 ### Video Rating Persistence
 

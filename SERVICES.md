@@ -2,6 +2,20 @@
 
 This document describes all available services provided by the Media Index integration.
 
+## Multi-Instance Support
+
+All services support multiple integration instances using Home Assistant's target selector:
+
+```yaml
+service: media_index.restore_edited_files
+target:
+  entity_id: sensor.media_index_photos_total_files
+```
+
+**Target Options:**
+- `entity_id: sensor.media_index_photos_total_files` - Target specific instance
+- Omit target - Operates on all configured instances
+
 ## User Services
 
 ### `media_index.restore_edited_files`
