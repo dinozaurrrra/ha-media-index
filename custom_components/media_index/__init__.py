@@ -38,6 +38,9 @@ from .geocoding import GeocodeService
 
 _LOGGER = logging.getLogger(__name__)
 
+# Config entry only - no YAML configuration supported
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
 PLATFORMS: list[Platform] = [Platform.SENSOR]
 
 # Service schemas (all allow extra fields for target selector support)
