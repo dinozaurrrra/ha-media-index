@@ -107,84 +107,32 @@ media/Photo/OneDrive/Mark-Pictures/Samsung Gallery/DCIM/Camera
 After setup, you can reconfigure options via:
 **Settings** → **Devices & Services** → **Media Index** → **Configure**
 
-## Services
+## Key Service for End Users
 
-### `media_index.get_random_items`
+### `media_index.restore_edited_files`
 
-Get random media files from the index.
+**⭐ Most Important Service** - Move files from `_Edit` folder back to their original locations after editing.
 
-**Parameters:**
-- `count` (optional, default: 10): Number of items to return
-- `folder` (optional): Filter by specific folder
-- `file_type` (optional): Filter by `image` or `video`
-- `date_from` (optional): ISO date string (YYYY-MM-DD)
-- `date_to` (optional): ISO date string (YYYY-MM-DD)
-- `favorites_only` (optional): Return only favorited items
+When you use the Media Card's "Mark for Edit" button, files are moved to an `_Edit` folder for correction. After making your edits, run this service to restore them to their original locations.
 
-**Returns:** List of media items with metadata
-
-**Example:**
+**Usage:**
 ```yaml
-service: media_index.get_random_items
-data:
-  count: 20
-  file_type: image
-  favorites_only: true
+service: media_index.restore_edited_files
 ```
 
-### `media_index.mark_favorite`
+**Recommendation:** Run this service periodically (weekly/monthly) as part of your media management workflow.
 
-Mark a file as favorite (writes to database and EXIF).
+## All Available Services
 
-**Parameters:**
-- `file_path` (required): Full path to media file
-- `is_favorite` (optional, default: true): Favorite status
+The integration provides additional services for advanced use cases and Media Card integration. See [SERVICES.md](SERVICES.md) for complete documentation of all available services including:
 
-**Example:**
-```yaml
-service: media_index.mark_favorite
-data:
-  file_path: /media/photo/PhotoLibrary/sunset.jpg
-  is_favorite: true
-```
-
-### `media_index.delete_media`
-
-Delete a media file (moves to `_Junk` folder).
-
-**Parameters:**
-- `file_path` (required): Full path to media file
-
-### `media_index.mark_for_edit`
-
-Mark a file for editing (moves to `_Edit` folder).
-
-**Parameters:**
-- `file_path` (required): Full path to media file
-
-### `media_index.get_file_metadata`
-
-Get detailed metadata for a specific file.
-
-**Parameters:**
-- `file_path` (required): Full path to media file
-
-**Returns:** Complete metadata including EXIF, location, and ratings
-
-### `media_index.geocode_file`
-
-Force geocoding of a file's GPS coordinates.
-
-**Parameters:**
-- `file_path` (required): Full path to media file
-
-### `media_index.scan_folder`
-
-Trigger a manual scan of media folders.
-
-**Parameters:**
-- `folder_path` (optional): Specific folder to scan (defaults to all watched folders)
-- `force_rescan` (optional, default: false): Re-extract metadata for existing files
+- `get_random_items` - Random media selection (used by Media Card)
+- `mark_favorite` - Toggle favorite status
+- `delete_media` - Move files to `_Junk` folder
+- `mark_for_edit` - Move files to `_Edit` folder
+- `get_file_metadata` - Get detailed metadata
+- `geocode_file` - Force geocoding
+- `scan_folder` - Manual folder scanning
 
 ## Sensors
 
@@ -346,18 +294,7 @@ Import ratings from an exported file and apply to matching files.
 - Merge with existing ratings
 - Update database and EXIF (for images)
 
-#### `media_index.restore_edited_files`
-Move files from `_Edit` folder back to their original locations.
 
-**How it works:**
-- Track original file paths when moving to `_Edit`
-- Store move history in database or separate log file
-- Service reads history and restores files to original locations
-
-**Use cases:**
-- Complete editing workflow
-- Bulk restore after batch editing
-- Undo accidental moves
 
 ## Development
 
