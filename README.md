@@ -149,55 +149,47 @@ The integration creates the following sensors for each configured entry:
 - `geocoded_files`: Number of files with location data
 - `favorited_files`: Number of favorited files
 
-## Architecture
+## How It Works
 
-### Components
+The Media Index integration runs in the background to keep your media organized and accessible:
 
-**`scanner.py`**
-- Media file discovery and indexing
-- EXIF/video metadata extraction
-- Geocoding integration
-- Scan orchestration
+### Initial Indexing
+When first set up, the integration scans your configured folders and:
+- **Discovers all media files** (images and videos) in your folders
+- **Extracts metadata** like date taken, GPS coordinates, camera settings, and star ratings
+- **Stores everything in a local database** for fast access during slideshows
 
-**`cache_manager.py`**
-- SQLite database operations
-- Query optimization
-- CRUD operations for files, EXIF data, geocoding cache
+### Real-Time Monitoring  
+After initial setup, the integration watches for changes:
+- **New files added** → Automatically indexed and added to database
+- **Files moved/deleted** → Database updated to reflect changes
+- **Files edited** → Re-scanned to pick up metadata changes
 
-**`exif_parser.py`**
-- Image EXIF metadata extraction (PIL/piexif)
-- GPS coordinate parsing
-- Date/time extraction
-- Rating read/write
+### Geocoding (Location Names)
+For photos with GPS coordinates, the integration gradually adds location names:
+- **Rate limited to 1 request per second** to respect Nominatim API limits
+- **Works progressively** during scans - doesn't slow down initial indexing
+- **Caches results** to avoid repeated API calls for the same coordinates
+- **Provides location hierarchy** from specific place names to country level
 
-**`video_parser.py`**
-- Video metadata extraction (mutagen)
-- MP4/MOV support
-- GPS coordinate extraction from QuickTime atoms
-- Creation date extraction
+### Database Performance
+The integration uses an optimized SQLite database that:
+- **Responds instantly** to random media requests from your slideshow cards
+- **Tracks exclusions** to avoid showing the same photos repeatedly
+- **Maintains favorites and ratings** with both database and file metadata
+- **Grows efficiently** as your media collection expands
 
-**`geocoding.py`**
-- Nominatim API integration
-- Rate limiting (1 req/sec)
-- Location hierarchy extraction
-- Error handling and retries
+This background processing means your Media Cards can display random photos instantly without scanning folders every time!
 
-**`watcher.py`**
-- File system monitoring (watchdog)
-- Real-time event handling
-- Automatic re-indexing on changes
+## Using with Media Cards
 
-### Data Flow
+Media Index is designed to work seamlessly with the [Home Assistant Media Card](https://github.com/markaggar/ha-media-card):
 
-```
-File System → Scanner → EXIF/Video Parser → Cache Manager → Database
-                ↓
-            Geocoding Service → Geocode Cache
-```
-
-## Frontend Integration
-
-Media Index is designed to work with the [ha-media-card](https://github.com/markaggar/ha-media-card) custom Lovelace card for displaying media slideshows.
+- **Instant slideshow loading** - No waiting for folder scans
+- **Smart random selection** - Avoids repetition within slideshow sessions  
+- **Rich metadata display** - Shows location names, ratings, and EXIF data
+- **Interactive controls** - Favorite, delete, and mark for editing directly from the card
+- **Background updates** - New photos appear automatically without restart
 
 ## Performance
 
