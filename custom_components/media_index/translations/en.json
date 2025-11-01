@@ -31,6 +31,7 @@
           "extract_exif": "Extract EXIF metadata",
           "geocode_enabled": "Enable geocoding",
           "geocode_precision": "Coordinate precision (decimal places)",
+          "geocode_native_language": "Use native language names (e.g., 日本 instead of Japan)",
           "max_startup_time": "Max startup scan time (seconds)",
           "concurrent_scans": "Concurrent scan workers",
           "batch_size": "Batch size (files per batch)",

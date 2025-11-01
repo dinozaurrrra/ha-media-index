@@ -31,9 +31,16 @@ COORDINATE_PRECISION = 3
 class GeocodeService:
     """Service for geocoding GPS coordinates to location names."""
 
-    def __init__(self, hass):
-        """Initialize the geocoding service."""
+    def __init__(self, hass, use_native_language=False):
+        """Initialize the geocoding service.
+        
+        Args:
+            hass: Home Assistant instance
+            use_native_language: If True, request native language names from Nominatim.
+                               If False (default), request English names.
+        """
         self.hass = hass
+        self.use_native_language = use_native_language
         self._last_request_time = 0
         self._session = None
 
@@ -114,6 +121,11 @@ class GeocodeService:
                 headers = {
                     'User-Agent': 'HomeAssistant-MediaIndex/1.0 (+https://github.com/markaggar/ha-media-index)'
                 }
+                
+                # Request English names by default (unless native language is enabled)
+                # This provides consistent, readable location names for non-native speakers
+                if not self.use_native_language:
+                    headers['Accept-Language'] = 'en'
                 
                 async with session.get(
                     NOMINATIM_URL, 

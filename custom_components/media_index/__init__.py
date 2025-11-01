@@ -18,8 +18,10 @@ from .const import (
     CONF_SCAN_ON_STARTUP,
     CONF_ENABLE_WATCHER,
     CONF_GEOCODE_ENABLED,
+    CONF_GEOCODE_NATIVE_LANGUAGE,
     DEFAULT_ENABLE_WATCHER,
     DEFAULT_GEOCODE_ENABLED,
+    DEFAULT_GEOCODE_NATIVE_LANGUAGE,
     SERVICE_GET_RANDOM_ITEMS,
     SERVICE_GET_FILE_METADATA,
     SERVICE_GEOCODE_FILE,
@@ -111,11 +113,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Initialize geocoding service
     config = {**entry.data, **entry.options}
     enable_geocoding = config.get(CONF_GEOCODE_ENABLED, DEFAULT_GEOCODE_ENABLED)
+    use_native_language = config.get(CONF_GEOCODE_NATIVE_LANGUAGE, DEFAULT_GEOCODE_NATIVE_LANGUAGE)
     geocode_service = None
     
     if enable_geocoding:
-        geocode_service = GeocodeService(hass)
-        _LOGGER.info("Geocoding service enabled")
+        geocode_service = GeocodeService(hass, use_native_language=use_native_language)
+        _LOGGER.info("Geocoding service enabled (native_language=%s)", use_native_language)
     
     # Initialize scanner with geocoding support
     scanner = MediaScanner(

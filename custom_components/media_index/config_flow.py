@@ -18,6 +18,7 @@ from .const import (
     CONF_EXTRACT_EXIF,
     CONF_GEOCODE_ENABLED,
     CONF_GEOCODE_PRECISION,
+    CONF_GEOCODE_NATIVE_LANGUAGE,
     CONF_MAX_STARTUP_TIME,
     CONF_CONCURRENT_SCANS,
     CONF_BATCH_SIZE,
@@ -28,6 +29,7 @@ from .const import (
     DEFAULT_EXTRACT_EXIF,
     DEFAULT_GEOCODE_ENABLED,
     DEFAULT_GEOCODE_PRECISION,
+    DEFAULT_GEOCODE_NATIVE_LANGUAGE,
     DEFAULT_MAX_STARTUP_TIME,
     DEFAULT_CONCURRENT_SCANS,
     DEFAULT_BATCH_SIZE,
@@ -159,6 +161,10 @@ class MediaIndexOptionsFlow(config_entries.OptionsFlow):
             CONF_GEOCODE_PRECISION,
             self.config_entry.data.get(CONF_GEOCODE_PRECISION, DEFAULT_GEOCODE_PRECISION),
         )
+        current_native_language = self.config_entry.options.get(
+            CONF_GEOCODE_NATIVE_LANGUAGE,
+            self.config_entry.data.get(CONF_GEOCODE_NATIVE_LANGUAGE, DEFAULT_GEOCODE_NATIVE_LANGUAGE),
+        )
         current_max_startup = self.config_entry.options.get(
             CONF_MAX_STARTUP_TIME,
             self.config_entry.data.get(CONF_MAX_STARTUP_TIME, DEFAULT_MAX_STARTUP_TIME),
@@ -195,6 +201,9 @@ class MediaIndexOptionsFlow(config_entries.OptionsFlow):
                     vol.Optional(
                         CONF_GEOCODE_PRECISION, default=current_precision
                     ): vol.All(vol.Coerce(int), vol.Range(min=2, max=6)),
+                    vol.Optional(
+                        CONF_GEOCODE_NATIVE_LANGUAGE, default=current_native_language
+                    ): bool,
                     vol.Optional(
                         CONF_MAX_STARTUP_TIME, default=current_max_startup
                     ): vol.All(vol.Coerce(int), vol.Range(min=5, max=300)),

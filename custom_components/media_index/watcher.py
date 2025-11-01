@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Optional
 
 from watchdog.observers import Observer
+from watchdog.observers.polling import PollingObserver
 from watchdog.events import FileSystemEventHandler, FileSystemEvent
 
 from homeassistant.core import HomeAssistant
@@ -38,7 +39,7 @@ class MediaFileEventHandler(FileSystemEventHandler):
         if not self._is_media_file(event.src_path):
             return
         
-        _LOGGER.debug("New media file detected: %s", event.src_path)
+        _LOGGER.info("New media file detected: %s", event.src_path)
         self.hass.loop.call_soon_threadsafe(
             self.hass.async_create_task, self._handle_new_file(event.src_path)
         )
@@ -152,7 +153,10 @@ class MediaWatcher:
             return
         
         try:
-            self.observer = Observer()
+            # Use PollingObserver for network filesystems (inotify doesn't work on CIFS/SMB)
+            # Polling is less efficient but works reliably on network shares
+            _LOGGER.info("Using PollingObserver for network filesystem compatibility")
+            self.observer = PollingObserver()
             
             # Determine paths to watch
             watch_paths = []
