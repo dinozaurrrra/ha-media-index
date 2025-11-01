@@ -712,6 +712,206 @@ To use the WebSocket API with Media Index:
 2. **Media Index integration** - Installed and configured
 3. **WebSocket connection** - Available via `this.hass` in custom cards
 
+## Troubleshooting
+
+### Issue: Service Returns Empty Response
+
+**Symptom:** Service call succeeds but returns no items or empty array.
+
+**Common Causes:**
+
+1. **Missing `target` parameter** - Service routing to wrong instance
+   ```javascript
+   // ❌ Wrong - routes to first instance by default
+   const response = await this.hass.callWS({
+     type: 'call_service',
+     domain: 'media_index',
+     service: 'get_random_items',
+     service_data: { count: 100 },
+     return_response: true
+   });
+   
+   // ✅ Correct - explicitly specify target instance
+   const response = await this.hass.callWS({
+     type: 'call_service',
+     domain: 'media_index',
+     service: 'get_random_items',
+     service_data: { count: 100 },
+     target: {
+       entity_id: 'sensor.media_index_media_photo_photolibrary_total_files'
+     },
+     return_response: true
+   });
+   ```
+
+2. **Incorrect response extraction** - Not handling nested response structure
+   ```javascript
+   // ❌ Wrong - may get undefined if structure varies
+   const items = wsResponse.response.items;
+   
+   // ✅ Correct - safely extract response
+   const response = wsResponse?.response || wsResponse;
+   const items = response?.items || [];
+   ```
+
+3. **No media indexed** - Database is empty or scan hasn't run yet
+   - Check sensor state: `sensor.media_index_*_total_files` should be > 0
+   - Trigger manual scan: `media_index.scan_folder`
+   - Verify `watched_folders` configuration
+
+### Issue: Service Call to Wrong Instance
+
+**Symptom:** Getting files from unexpected folder or no results when files exist.
+
+**Solution:** Always specify `target` when multiple instances are configured:
+
+```javascript
+// Determine which instance to query
+const entityId = this.config.media_index?.entity_id || 
+                 'sensor.media_index_media_photo_photolibrary_total_files';
+
+// Include target in all service calls
+const wsCall = {
+  type: 'call_service',
+  domain: 'media_index',
+  service: 'get_random_items',
+  service_data: { count: 100 },
+  target: { entity_id: entityId },
+  return_response: true
+};
+```
+
+### Issue: WebSocket Call Returns Undefined
+
+**Symptom:** `await this.hass.callWS()` returns `undefined` or throws error.
+
+**Common Causes:**
+
+1. **Missing `return_response: true`**
+   ```javascript
+   // ❌ Wrong - returns undefined
+   const response = await this.hass.callWS({
+     type: 'call_service',
+     domain: 'media_index',
+     service: 'get_random_items',
+     service_data: { count: 100 }
+   });
+   
+   // ✅ Correct - returns data
+   const response = await this.hass.callWS({
+     type: 'call_service',
+     domain: 'media_index',
+     service: 'get_random_items',
+     service_data: { count: 100 },
+     return_response: true  // CRITICAL
+   });
+   ```
+
+2. **Service doesn't support `return_response`**
+   - Verify Media Index version supports `SupportsResponse.OPTIONAL`
+   - Check Home Assistant logs for service registration errors
+
+3. **WebSocket not ready**
+   ```javascript
+   // Wait for hass to be fully initialized
+   if (!this.hass) {
+     console.warn('Home Assistant connection not ready');
+     return;
+   }
+   ```
+
+### Issue: Network Share Files Not Detected by Watcher
+
+**Symptom:** New files added to watched folders are not indexed until next scheduled scan.
+
+**Root Cause:** inotify (default file system watcher) does not work on network filesystems (CIFS/SMB/NFS).
+
+**Solution:** Media Index v1.2+ automatically uses `PollingObserver` for network share compatibility. Verify watcher is running:
+
+1. Check integration logs for: `"Using PollingObserver for network filesystem compatibility"`
+2. Verify `watched_folders` configuration in integration options
+3. Check sensor attribute: `watched_folders` should list your folders
+4. Test by adding a file - should be detected within 1-2 seconds
+
+If watcher still not working:
+- Ensure `enable_watcher` is not set to `false` in configuration
+- Check for errors in Home Assistant logs: "Failed to start watcher"
+- Verify folder paths are accessible from HA container
+
+### Issue: Folder Filter Returns No Results
+
+**Symptom:** Specifying `folder` parameter returns empty array even though files exist in that folder.
+
+**Common Causes:**
+
+1. **Incorrect folder path format**
+   ```javascript
+   // ❌ Wrong - full path or leading slash
+   folder: '/media/Photo/PhotoLibrary/New'
+   folder: '/New'
+   
+   // ✅ Correct - relative to base_folder
+   folder: 'New'
+   folder: 'Vacation/2024'
+   ```
+
+2. **Files not in database** - Folder exists but hasn't been scanned
+   ```javascript
+   // Check total files in instance
+   const sensor = this.hass.states['sensor.media_index_media_photo_photolibrary_total_files'];
+   console.log('Total indexed files:', sensor.state);
+   console.log('Watched folders:', sensor.attributes.watched_folders);
+   ```
+
+### Debugging Service Calls
+
+Add comprehensive logging to diagnose issues:
+
+```javascript
+async queryMediaIndex() {
+  const entityId = this.config.media_index?.entity_id;
+  console.log('🔍 Querying media_index:', {
+    entity: entityId,
+    hasTarget: !!entityId
+  });
+  
+  try {
+    const wsCall = {
+      type: 'call_service',
+      domain: 'media_index',
+      service: 'get_random_items',
+      service_data: { count: 100 },
+      return_response: true
+    };
+    
+    if (entityId) {
+      wsCall.target = { entity_id: entityId };
+    }
+    
+    console.log('📤 WebSocket request:', wsCall);
+    const wsResponse = await this.hass.callWS(wsCall);
+    console.log('📥 WebSocket response:', wsResponse);
+    
+    const response = wsResponse?.response || wsResponse;
+    console.log('✅ Extracted response:', response);
+    
+    return response?.items || [];
+  } catch (error) {
+    console.error('❌ Service call failed:', error);
+    return [];
+  }
+}
+```
+
+Check Home Assistant logs for backend errors:
+```bash
+# View integration logs
+grep "media_index" /config/home-assistant.log
+
+# Real-time monitoring
+tail -f /config/home-assistant.log | grep "media_index"
+```
+
 ## Testing
 
 Test your integration using the Home Assistant Developer Tools:
