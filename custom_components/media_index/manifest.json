@@ -2,8 +2,8 @@
   "domain": "media_index",
   "name": "Media Index",
   "version": "1.2.0",
-  "documentation": "https://github.com/markaggar/ha-media-index",
-  "issue_tracker": "https://github.com/markaggar/ha-media-index/issues",
+  "documentation": "https://github.com/markaggar/media-index",
+  "issue_tracker": "https://github.com/markaggar/media-index/issues",
   "dependencies": [],
   "codeowners": ["@markaggar"],
   "requirements": [

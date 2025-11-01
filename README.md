@@ -1,7 +1,7 @@
 # Media Index for Home Assistant
 
-[![GitHub release (latest by date)](https://img.shields.io/github/v/release/markaggar/ha-media-index)](https://github.com/markaggar/ha-media-index/releases)
-[![GitHub](https://img.shields.io/github/license/markaggar/ha-media-index)](LICENSE)
+[![GitHub release (latest by date)](https://img.shields.io/github/v/release/markaggar/media-index)](https://github.com/markaggar/media-index/releases)
+[![GitHub](https://img.shields.io/github/license/markaggar/media-index)](LICENSE)
 [![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
 
 A custom Home Assistant integration that indexes media files (images and videos) from local folders, extracts EXIF/metadata, provides geocoding, and offers services for random media selection, favorites management, and file operations.
@@ -46,7 +46,7 @@ A custom Home Assistant integration that indexes media files (images and videos)
 1. Open HACS in Home Assistant
 2. Click "Integrations"
 3. Click the three dots in the top right and select "Custom repositories"
-4. Add `https://github.com/markaggar/ha-media-index` as an Integration
+4. Add `https://github.com/markaggar/media-index` as an Integration
 5. Click "Install"
 6. Restart Home Assistant
 
