@@ -1,6 +1,6 @@
 {
   "domain": "media_index",
-  "name": "Home Assistant Media Index",
+  "name": "Media Index",
   "after_dependencies": [],
   "codeowners": ["@markaggar"],
   "config_flow": true,
