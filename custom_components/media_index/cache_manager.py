@@ -87,6 +87,7 @@ class CacheManager:
                 date_taken INTEGER,
                 latitude REAL,
                 longitude REAL,
+                altitude REAL,
                 location_name TEXT,
                 location_city TEXT,
                 location_state TEXT,
@@ -97,6 +98,10 @@ class CacheManager:
                 aperture REAL,
                 shutter_speed TEXT,
                 focal_length REAL,
+                focal_length_35mm INTEGER,
+                exposure_compensation TEXT,
+                metering_mode TEXT,
+                white_balance TEXT,
                 flash TEXT,
                 FOREIGN KEY (file_id) REFERENCES media_files(id) ON DELETE CASCADE
             )
@@ -190,6 +195,41 @@ class CacheManager:
         
         await self._db.commit()
         _LOGGER.debug("Database schema created/verified")
+        
+        # Run migrations for existing databases
+        await self._run_migrations()
+    
+    async def _run_migrations(self) -> None:
+        """Run database migrations for schema updates."""
+        # Check if new columns exist in exif_data table
+        async with self._db.execute("PRAGMA table_info(exif_data)") as cursor:
+            columns = await cursor.fetchall()
+            column_names = [col[1] for col in columns]
+        
+        # Add new EXIF columns if they don't exist
+        new_columns = {
+            'altitude': 'REAL',
+            'focal_length_35mm': 'INTEGER',
+            'exposure_compensation': 'TEXT',
+            'metering_mode': 'TEXT',
+            'white_balance': 'TEXT'
+        }
+        
+        # Validate against whitelist to prevent SQL injection
+        allowed_col_names = set(new_columns.keys())
+        allowed_col_types = {"REAL", "INTEGER", "TEXT"}
+        
+        for col_name, col_type in new_columns.items():
+            if col_name not in column_names:
+                # Additional safety check
+                if col_name not in allowed_col_names or col_type not in allowed_col_types:
+                    _LOGGER.error("Attempted to add invalid column or type: %s %s", col_name, col_type)
+                    continue
+                _LOGGER.info("Adding column '%s' to exif_data table", col_name)
+                await self._db.execute(f"ALTER TABLE exif_data ADD COLUMN {col_name} {col_type}")
+        
+        await self._db.commit()
+        _LOGGER.debug("Database migrations completed")
     
     async def get_total_files(self) -> int:
         """Get total number of indexed files.
@@ -286,11 +326,39 @@ class CacheManager:
         Returns:
             File ID
         """
+        # Check if file exists and if modified_time has changed
+        # Only update last_scanned if file is new OR modified_time changed
+        current_time = int(datetime.now().timestamp())
+        
+        async with self._db.execute(
+            "SELECT modified_time, last_scanned FROM media_files WHERE path = ?",
+            (file_data['path'],)
+        ) as cursor:
+            existing_row = await cursor.fetchone()
+        
+        # Determine last_scanned value:
+        # - If file doesn't exist: use current_time (new file)
+        # - If modified_time changed: use current_time (file was modified)
+        # - If modified_time unchanged: preserve existing last_scanned (file hasn't changed)
+        if existing_row is None:
+            # New file - use current timestamp
+            last_scanned_value = current_time
+        elif existing_row[0] != file_data['modified_time']:
+            # File modified - use current timestamp
+            last_scanned_value = current_time
+        else:
+            # File unchanged - preserve existing last_scanned
+            last_scanned_value = existing_row[1]
+        
         await self._db.execute("""
             INSERT OR REPLACE INTO media_files 
             (path, filename, folder, file_type, file_size, modified_time, 
-             created_time, last_scanned, orientation)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+             created_time, last_scanned, width, height, orientation,
+             is_favorited, rating, rated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 
+                    COALESCE((SELECT is_favorited FROM media_files WHERE path = ?), ?),
+                    COALESCE((SELECT rating FROM media_files WHERE path = ?), ?),
+                    (SELECT rated_at FROM media_files WHERE path = ?))
         """, (
             file_data['path'],
             file_data['filename'],
@@ -299,8 +367,14 @@ class CacheManager:
             file_data.get('file_size'),
             file_data['modified_time'],
             file_data.get('created_time'),
-            int(datetime.now().timestamp()),
+            last_scanned_value,  # Use computed value instead of always current_time
+            file_data.get('width'),
+            file_data.get('height'),
             file_data.get('orientation'),
+            # Preserve existing is_favorited/rating/rated_at if row exists, else use defaults
+            file_data['path'], file_data.get('is_favorited', 0),
+            file_data['path'], file_data.get('rating', 0),
+            file_data['path'],
         ))
         
         await self._db.commit()
@@ -322,28 +396,37 @@ class CacheManager:
             file_id: ID of the file in media_files table
             exif_data: Dictionary with EXIF metadata
         """
-        # Check if EXIF data already exists with geocoded location
-        existing_location = None
+        # Skip if no EXIF data provided
+        if not exif_data:
+            return
+        
+        # Check if EXIF data already exists - preserve geocoded location and favorite data
+        existing_data = None
         async with self._db.execute("""
-            SELECT location_name, location_city, location_state, location_country
+            SELECT location_name, location_city, location_state, location_country,
+                   rating, is_favorited
             FROM exif_data
             WHERE file_id = ?
         """, (file_id,)) as cursor:
             row = await cursor.fetchone()
-            if row and row[1]:  # If location_city is populated
-                existing_location = {
+            if row:
+                existing_data = {
                     'location_name': row[0],
                     'location_city': row[1],
                     'location_state': row[2],
-                    'location_country': row[3]
+                    'location_country': row[3],
+                    'rating': row[4],
+                    'is_favorited': row[5]
                 }
         
         await self._db.execute("""
             INSERT OR REPLACE INTO exif_data 
-            (file_id, camera_make, camera_model, date_taken, latitude, longitude,
+            (file_id, camera_make, camera_model, date_taken, latitude, longitude, altitude,
              location_name, location_city, location_state, location_country,
-             iso, aperture, shutter_speed, focal_length, flash)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             rating, is_favorited,
+             iso, aperture, shutter_speed, focal_length, focal_length_35mm,
+             exposure_compensation, metering_mode, white_balance, flash)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             file_id,
             exif_data.get('camera_make'),
@@ -351,15 +434,24 @@ class CacheManager:
             exif_data.get('date_taken'),
             exif_data.get('latitude'),
             exif_data.get('longitude'),
-            # Preserve existing geocoded location if available
-            existing_location['location_name'] if existing_location else None,
-            existing_location['location_city'] if existing_location else None,
-            existing_location['location_state'] if existing_location else None,
-            existing_location['location_country'] if existing_location else None,
+            exif_data.get('altitude'),
+            # Preserve existing geocoded location if available, otherwise use None
+            existing_data['location_name'] if existing_data and existing_data.get('location_city') else None,
+            existing_data['location_city'] if existing_data and existing_data.get('location_city') else None,
+            existing_data['location_state'] if existing_data and existing_data.get('location_city') else None,
+            existing_data['location_country'] if existing_data and existing_data.get('location_city') else None,
+            # Use rating from EXIF if present, otherwise preserve existing
+            exif_data.get('rating') if exif_data.get('rating') is not None else (existing_data.get('rating') if existing_data else None),
+            # Use is_favorited from EXIF if present, otherwise preserve existing
+            exif_data.get('is_favorited') if exif_data.get('is_favorited') is not None else (existing_data.get('is_favorited') if existing_data else 0),
             exif_data.get('iso'),
             exif_data.get('aperture'),
             exif_data.get('shutter_speed'),
             exif_data.get('focal_length'),
+            exif_data.get('focal_length_35mm'),
+            exif_data.get('exposure_compensation'),
+            exif_data.get('metering_mode'),
+            exif_data.get('white_balance'),
             exif_data.get('flash'),
         ))
         
@@ -536,11 +628,14 @@ class CacheManager:
         folder: str | None = None,
         file_type: str | None = None,
         date_from: str | None = None,
-        date_to: str | None = None
+        date_to: str | None = None,
+        priority_new_files: bool = False,
+        new_files_threshold_seconds: int = 3600
     ) -> list[dict]:
         """Get random media files with optional filters and EXIF data.
         
         Includes geocoding status to enable progressive on-demand geocoding.
+        If priority_new_files=True, prioritizes recently scanned files.
         
         Args:
             count: Number of random files to return
@@ -548,6 +643,8 @@ class CacheManager:
             file_type: Filter by file type ('image' or 'video')
             date_from: Filter by date >= this value (YYYY-MM-DD)
             date_to: Filter by date <= this value (YYYY-MM-DD)
+            priority_new_files: If True, prioritize recently scanned files
+            new_files_threshold_seconds: Threshold in seconds for "new" files (default 1 hour)
             
         Returns:
             List of file records with metadata and EXIF data including:
@@ -556,6 +653,180 @@ class CacheManager:
             - latitude, longitude: float (if has_coordinates)
             - location_name, location_city, location_country: str (if is_geocoded)
             - date_taken: timestamp (if available)
+        """
+        import time
+        
+        if priority_new_files:
+            # Priority queue mode: Get new files first, then fill with random
+            current_time = int(time.time())
+            threshold_time = current_time - new_files_threshold_seconds
+            
+            # Query 1: Get newly scanned files (last_scanned > threshold)
+            new_files_query = """
+                SELECT 
+                    m.*,
+                    e.date_taken,
+                    e.latitude,
+                    e.longitude,
+                    e.location_name,
+                    e.location_city,
+                    e.location_state,
+                    e.location_country,
+                    e.is_favorited,
+                    e.camera_make,
+                    e.camera_model
+                FROM media_files m
+                LEFT JOIN exif_data e ON m.id = e.file_id
+                WHERE m.last_scanned > ?
+                  AND m.folder NOT LIKE '%/_Junk%'
+                  AND m.folder NOT LIKE '%/_Edit%'
+            """
+            params = [threshold_time]
+            
+            if folder:
+                new_files_query += " AND LOWER(m.folder) LIKE LOWER(?)"
+                params.append(f"{folder}%")
+            
+            if file_type:
+                new_files_query += " AND m.file_type = ?"
+                params.append(file_type.lower())
+            
+            if date_from:
+                new_files_query += " AND DATE(m.modified_time, 'unixepoch') >= ?"
+                params.append(str(date_from))
+            
+            if date_to:
+                new_files_query += " AND DATE(m.modified_time, 'unixepoch') <= ?"
+                params.append(str(date_to))
+            
+            # V5 IMPROVEMENT: Get ALL recent files, then randomly sample
+            # This ensures even distribution - all recent files have equal chance
+            # Fixes "last 20" problem where only first 20 recent files were returned
+            new_files_query += " ORDER BY m.last_scanned DESC"
+            # Note: No LIMIT here - we get all recent files, then sample below
+            
+            _LOGGER.debug("Priority queue query (all recent): %s with params: %s", new_files_query, params)
+            
+            async with self._db.execute(new_files_query, tuple(params)) as cursor:
+                new_files_rows = await cursor.fetchall()
+            
+            all_new_files = [dict(row) for row in new_files_rows]
+            _LOGGER.debug("Found %d total recent files (within %d sec threshold)", 
+                         len(all_new_files), new_files_threshold_seconds)
+            
+            # Randomly sample from recent files (up to count requested)
+            import random
+            if len(all_new_files) > count:
+                new_files = random.sample(all_new_files, count)
+                _LOGGER.debug("Randomly sampled %d from %d recent files", count, len(all_new_files))
+            else:
+                new_files = all_new_files
+            
+            # Query 2: Fill remaining slots with random non-recent files
+            remaining = count - len(new_files)
+            if remaining > 0:
+                exclude_ids = [f['id'] for f in new_files]
+                random_files = await self._get_random_excluding(
+                    count=remaining,
+                    exclude_ids=exclude_ids,
+                    folder=folder,
+                    file_type=file_type,
+                    date_from=date_from,
+                    date_to=date_to
+                )
+                result = new_files + random_files
+            else:
+                result = new_files[:count]
+            
+            # Add geocoding status flags
+            for item in result:
+                item['has_coordinates'] = item.get('latitude') is not None and item.get('longitude') is not None
+                item['is_geocoded'] = item.get('location_city') is not None
+            
+            _LOGGER.debug("Priority queue returned %d new files + %d random files", 
+                         len(new_files), len(result) - len(new_files))
+            return result
+        
+        else:
+            # Standard random mode (backward compatible)
+            query = """
+                SELECT 
+                    m.*,
+                    e.date_taken,
+                    e.latitude,
+                    e.longitude,
+                    e.location_name,
+                    e.location_city,
+                    e.location_state,
+                    e.location_country,
+                    e.is_favorited,
+                    e.camera_make,
+                    e.camera_model
+                FROM media_files m
+                LEFT JOIN exif_data e ON m.id = e.file_id
+                WHERE 1=1
+                    AND m.folder NOT LIKE '%/_Junk%'
+                    AND m.folder NOT LIKE '%/_Edit%'
+            """
+            params = []
+            
+            if folder:
+                # Use case-insensitive matching for folder paths (handles /media/Photo vs /media/photo)
+                query += " AND LOWER(m.folder) LIKE LOWER(?)"
+                params.append(f"{folder}%")
+            
+            if file_type:
+                query += " AND m.file_type = ?"
+                params.append(file_type.lower())
+            
+            if date_from:
+                query += " AND DATE(m.modified_time, 'unixepoch') >= ?"
+                params.append(str(date_from))
+            
+            if date_to:
+                query += " AND DATE(m.modified_time, 'unixepoch') <= ?"
+                params.append(str(date_to))
+            
+            query += " ORDER BY RANDOM() LIMIT ?"
+            params.append(int(count))
+            
+            _LOGGER.debug("Query: %s with params: %s", query, params)
+            
+            async with self._db.execute(query, tuple(params)) as cursor:
+                rows = await cursor.fetchall()
+            
+            # Convert rows to dicts and add geocoding status
+            result = []
+            for row in rows:
+                item = dict(row)
+                # Add progressive geocoding flags
+                item['has_coordinates'] = item.get('latitude') is not None and item.get('longitude') is not None
+                item['is_geocoded'] = item.get('location_city') is not None
+                result.append(item)
+            
+            return result
+    
+    async def _get_random_excluding(
+        self,
+        count: int,
+        exclude_ids: list[int],
+        folder: str | None = None,
+        file_type: str | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None
+    ) -> list[dict]:
+        """Get random files excluding specified IDs (helper for priority queue).
+        
+        Args:
+            count: Number of files to return
+            exclude_ids: List of file IDs to exclude
+            folder: Optional folder filter
+            file_type: Optional file type filter
+            date_from: Optional date from filter
+            date_to: Optional date to filter
+            
+        Returns:
+            List of random file records excluding specified IDs
         """
         query = """
             SELECT 
@@ -573,13 +844,23 @@ class CacheManager:
             FROM media_files m
             LEFT JOIN exif_data e ON m.id = e.file_id
             WHERE 1=1
-                AND m.folder NOT LIKE '%/_Junk%'
-                AND m.folder NOT LIKE '%/_Edit%'
+              AND m.folder NOT LIKE '%/_Junk%'
+              AND m.folder NOT LIKE '%/_Edit%'
         """
         params = []
         
+        # Exclude new files already selected
+        if exclude_ids:
+            # Ensure only integers are used in exclude_ids
+            safe_exclude_ids = [int(x) for x in exclude_ids if isinstance(x, int) or (isinstance(x, str) and x.isdigit())]
+            if len(safe_exclude_ids) != len(exclude_ids):
+                _LOGGER.warning("Some exclude_ids were not integers and have been ignored: %s", set(exclude_ids) - set(safe_exclude_ids))
+            if safe_exclude_ids:
+                placeholders = ','.join('?' * len(safe_exclude_ids))
+                query += f" AND m.id NOT IN ({placeholders})"
+                params.extend(safe_exclude_ids)
+        
         if folder:
-            # Use case-insensitive matching for folder paths (handles /media/Photo vs /media/photo)
             query += " AND LOWER(m.folder) LIKE LOWER(?)"
             params.append(f"{folder}%")
         
@@ -598,7 +879,94 @@ class CacheManager:
         query += " ORDER BY RANDOM() LIMIT ?"
         params.append(int(count))
         
-        _LOGGER.debug("Query: %s with params: %s", query, params)
+        async with self._db.execute(query, tuple(params)) as cursor:
+            rows = await cursor.fetchall()
+        
+        result = []
+        for row in rows:
+            item = dict(row)
+            item['has_coordinates'] = item.get('latitude') is not None and item.get('longitude') is not None
+            item['is_geocoded'] = item.get('location_city') is not None
+            result.append(item)
+        
+        return result
+    
+    async def get_ordered_files(
+        self,
+        count: int = 50,
+        folder: str | None = None,
+        recursive: bool = True,
+        file_type: str | None = None,
+        order_by: str = "date_taken",
+        order_direction: str = "desc"
+    ) -> list[dict]:
+        """Get ordered media files with configurable sort field and direction.
+        
+        Recursive mode sorts across ALL files regardless of folder boundaries.
+        
+        Args:
+            count: Maximum number of files to return
+            folder: Filter by folder path
+            recursive: Include subfolders (sorts across all files when true)
+            file_type: Filter by file type ('image' or 'video')
+            order_by: Sort field - 'date_taken', 'filename', 'path', 'modified_time'
+            order_direction: Sort direction - 'asc' or 'desc'
+            
+        Returns:
+            List of ordered file records with metadata
+        """
+        query = """
+            SELECT 
+                m.*,
+                e.date_taken,
+                e.latitude,
+                e.longitude,
+                e.location_name,
+                e.location_city,
+                e.location_state,
+                e.location_country,
+                e.is_favorited,
+                e.camera_make,
+                e.camera_model
+            FROM media_files m
+            LEFT JOIN exif_data e ON m.id = e.file_id
+            WHERE 1=1
+              AND m.folder NOT LIKE '%/_Junk%'
+              AND m.folder NOT LIKE '%/_Edit%'
+        """
+        params = []
+        
+        if folder:
+            if recursive:
+                # Include subfolders
+                query += " AND LOWER(m.folder) LIKE LOWER(?)"
+                params.append(f"{folder}%")
+            else:
+                # Exact folder match only
+                query += " AND LOWER(m.folder) = LOWER(?)"
+                params.append(folder)
+        
+        if file_type:
+            query += " AND m.file_type = ?"
+            params.append(file_type.lower())
+        
+        # Use explicit whitelist mapping for sort fields and directions
+        allowed_sort_fields = {
+            "date_taken": "COALESCE(e.date_taken, m.modified_time)",
+            "filename": "m.filename",
+            "path": "m.folder || '/' || m.filename",
+            "modified_time": "m.modified_time",
+        }
+        allowed_directions = {
+            "asc": "ASC",
+            "desc": "DESC",
+        }
+        sort_field = allowed_sort_fields.get(order_by, "COALESCE(e.date_taken, m.modified_time)")
+        direction = allowed_directions.get(order_direction.lower(), "ASC")
+        query += f" ORDER BY {sort_field} {direction} LIMIT ?"
+        params.append(int(count))
+        
+        _LOGGER.debug("Ordered query: %s with params: %s", query, params)
         
         async with self._db.execute(query, tuple(params)) as cursor:
             rows = await cursor.fetchall()
@@ -607,7 +975,6 @@ class CacheManager:
         result = []
         for row in rows:
             item = dict(row)
-            # Add progressive geocoding flags
             item['has_coordinates'] = item.get('latitude') is not None and item.get('longitude') is not None
             item['is_geocoded'] = item.get('location_city') is not None
             result.append(item)
@@ -694,11 +1061,12 @@ class CacheManager:
             True if successful, False if file not found
         """
         favorite_value = 1 if is_favorite else 0
+        rating_value = 5 if is_favorite else 0
         
-        # Update media_files table
+        # Update media_files table - set both is_favorited and rating
         async with self._db.execute(
-            "UPDATE media_files SET is_favorited = ? WHERE path = ?",
-            (favorite_value, file_path)
+            "UPDATE media_files SET is_favorited = ?, rating = ? WHERE path = ?",
+            (favorite_value, rating_value, file_path)
         ) as cursor:
             rows_affected = cursor.rowcount
         
@@ -706,9 +1074,9 @@ class CacheManager:
         # exif_data uses file_id (FK to media_files.id), so we need a subquery
         async with self._db.execute(
             """UPDATE exif_data 
-               SET is_favorited = ? 
+               SET is_favorited = ?, rating = ?
                WHERE file_id = (SELECT id FROM media_files WHERE path = ?)""",
-            (favorite_value, file_path)
+            (favorite_value, rating_value, file_path)
         ) as cursor:
             exif_rows_affected = cursor.rowcount
         

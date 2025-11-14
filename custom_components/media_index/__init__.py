@@ -1,6 +1,8 @@
 """Media Index integration for Home Assistant."""
+import asyncio
 import logging
 import os
+from datetime import timedelta
 from pathlib import Path
 
 import voluptuous as vol
@@ -9,6 +11,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import Platform
 from homeassistant.core import HomeAssistant, ServiceCall, SupportsResponse
 from homeassistant.helpers.typing import ConfigType
+from homeassistant.helpers.event import async_track_time_interval
 import homeassistant.helpers.config_validation as cv
 
 from .const import (
@@ -16,13 +19,20 @@ from .const import (
     CONF_BASE_FOLDER,
     CONF_WATCHED_FOLDERS,
     CONF_SCAN_ON_STARTUP,
+    CONF_SCAN_SCHEDULE,
     CONF_ENABLE_WATCHER,
     CONF_GEOCODE_ENABLED,
     CONF_GEOCODE_NATIVE_LANGUAGE,
     DEFAULT_ENABLE_WATCHER,
     DEFAULT_GEOCODE_ENABLED,
     DEFAULT_GEOCODE_NATIVE_LANGUAGE,
+    DEFAULT_SCAN_SCHEDULE,
+    SCAN_SCHEDULE_STARTUP_ONLY,
+    SCAN_SCHEDULE_HOURLY,
+    SCAN_SCHEDULE_DAILY,
+    SCAN_SCHEDULE_WEEKLY,
     SERVICE_GET_RANDOM_ITEMS,
+    SERVICE_GET_ORDERED_FILES,
     SERVICE_GET_FILE_METADATA,
     SERVICE_GEOCODE_FILE,
     SERVICE_SCAN_FOLDER,
@@ -50,6 +60,17 @@ SERVICE_GET_RANDOM_ITEMS_SCHEMA = vol.Schema({
     vol.Optional("file_type"): vol.In(["image", "video"]),
     vol.Optional("date_from"): cv.string,
     vol.Optional("date_to"): cv.string,
+    vol.Optional("priority_new_files", default=False): cv.boolean,
+    vol.Optional("new_files_threshold_seconds", default=3600): cv.positive_int,
+}, extra=vol.ALLOW_EXTRA)
+
+SERVICE_GET_ORDERED_FILES_SCHEMA = vol.Schema({
+    vol.Optional("count", default=50): cv.positive_int,
+    vol.Optional("folder"): cv.string,
+    vol.Optional("recursive", default=True): cv.boolean,
+    vol.Optional("file_type"): vol.In(["image", "video"]),
+    vol.Optional("order_by", default="date_taken"): vol.In(["date_taken", "filename", "path", "modified_time"]),
+    vol.Optional("order_direction", default="desc"): vol.In(["asc", "desc"]),
 }, extra=vol.ALLOW_EXTRA)
 
 SERVICE_GET_FILE_METADATA_SCHEMA = vol.Schema({
@@ -90,6 +111,57 @@ SERVICE_RESTORE_EDITED_FILES_SCHEMA = vol.Schema({
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     """Set up Media Index integration from YAML (not supported)."""
     return True
+
+
+def _setup_scheduled_scan(
+    hass: HomeAssistant,
+    entry: ConfigEntry,
+    scanner: MediaScanner,
+    base_folder: str,
+    watched_folders: list,
+    scan_schedule: str,
+) -> None:
+    """Setup scheduled scanning based on config.
+    
+    Args:
+        hass: Home Assistant instance
+        entry: Config entry
+        scanner: MediaScanner instance
+        base_folder: Base folder path
+        watched_folders: List of watched folders
+        scan_schedule: Schedule type (hourly/daily/weekly)
+    """
+    async def _scheduled_scan_callback(now):
+        """Run scheduled scan if not already running."""
+        # Check if scan already in progress
+        if scanner.is_scanning:
+            _LOGGER.info(
+                "Scheduled scan skipped - scan already in progress. "
+                "This prevents blocking watch folders and concurrent scans."
+            )
+            return
+        
+        _LOGGER.info("Starting scheduled scan (%s) of %s", scan_schedule, base_folder)
+        await scanner.scan_folder(base_folder, watched_folders)
+    
+    # Determine scan interval
+    if scan_schedule == SCAN_SCHEDULE_HOURLY:
+        interval = timedelta(hours=1)
+    elif scan_schedule == SCAN_SCHEDULE_DAILY:
+        interval = timedelta(days=1)
+    elif scan_schedule == SCAN_SCHEDULE_WEEKLY:
+        interval = timedelta(weeks=1)
+    else:
+        _LOGGER.warning("Unknown scan schedule: %s", scan_schedule)
+        return
+    
+    _LOGGER.info("Setting up scheduled scan: %s (interval=%s)", scan_schedule, interval)
+    
+    # Register the scheduled scan
+    remove_listener = async_track_time_interval(hass, _scheduled_scan_callback, interval)
+    
+    # Store the remove listener so we can cancel on unload
+    entry.async_on_unload(remove_listener)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
@@ -160,7 +232,12 @@ async def async_setup_entry(hass: HomeAssistant, entry: ConfigEntry) -> bool:
     # Start file system watcher if enabled
     if config.get(CONF_ENABLE_WATCHER, DEFAULT_ENABLE_WATCHER):
         _LOGGER.info("Starting file system watcher")
-        watcher.start_watching(base_folder, watched_folders)
+        await watcher.start_watching(base_folder, watched_folders)
+    
+    # Setup scheduled scanning
+    scan_schedule = config.get(CONF_SCAN_SCHEDULE, DEFAULT_SCAN_SCHEDULE)
+    if scan_schedule != SCAN_SCHEDULE_STARTUP_ONLY:
+        _setup_scheduled_scan(hass, entry, scanner, base_folder, watched_folders, scan_schedule)
     
     # Register services (only once, on first entry setup)
     if not hass.services.has_service(DOMAIN, SERVICE_GET_RANDOM_ITEMS):
@@ -222,6 +299,11 @@ def _get_entry_id_from_call(hass: HomeAssistant, call: ServiceCall) -> str:
         entity_registry = er.async_get(hass)
         entity_entry = entity_registry.async_get(entity_id)
         
+        # If not found and entity_id doesn't end with _total_files, try adding it
+        if not entity_entry and not entity_id.endswith("_total_files"):
+            _LOGGER.debug("Entity %s not found, trying with _total_files suffix", entity_id)
+            entity_entry = entity_registry.async_get(f"{entity_id}_total_files")
+        
         if entity_entry and entity_entry.config_entry_id:
             _LOGGER.info("Routing to integration instance from entity %s: %s", entity_id, entity_entry.config_entry_id)
             return entity_entry.config_entry_id
@@ -250,8 +332,7 @@ def _register_services(hass: HomeAssistant):
         entry_id = _get_entry_id_from_call(hass, call)
         cache_manager = hass.data[DOMAIN][entry_id]["cache_manager"]
         
-        _LOGGER.warning("🔍 get_random_items: entry_id=%s, call.data=%s, target=%s", 
-                       entry_id, call.data, call.data.get("target"))
+        _LOGGER.debug("get_random_items: entry_id=%s, call.data=%s", entry_id, call.data)
         
         items = await cache_manager.get_random_files(
             count=call.data.get("count", 10),
@@ -259,11 +340,32 @@ def _register_services(hass: HomeAssistant):
             file_type=call.data.get("file_type"),
             date_from=call.data.get("date_from"),
             date_to=call.data.get("date_to"),
+            priority_new_files=call.data.get("priority_new_files", False),
+            new_files_threshold_seconds=call.data.get("new_files_threshold_seconds", 3600),
         )
         
         result = {"items": items}
-        _LOGGER.warning("🔍 Retrieved %d random items from entry_id %s", len(items), entry_id)
-        _LOGGER.warning("🔍 Returning: %s", str(result)[:200])
+        _LOGGER.debug("Retrieved %d random items from entry_id %s", len(items), entry_id)
+        return result
+    
+    async def handle_get_ordered_files(call):
+        """Handle get_ordered_files service call."""
+        entry_id = _get_entry_id_from_call(hass, call)
+        cache_manager = hass.data[DOMAIN][entry_id]["cache_manager"]
+        
+        _LOGGER.debug("get_ordered_files: entry_id=%s, call.data=%s", entry_id, call.data)
+        
+        items = await cache_manager.get_ordered_files(
+            count=call.data.get("count", 50),
+            folder=call.data.get("folder"),
+            recursive=call.data.get("recursive", True),
+            file_type=call.data.get("file_type"),
+            order_by=call.data.get("order_by", "date_taken"),
+            order_direction=call.data.get("order_direction", "desc"),
+        )
+        
+        result = {"items": items}
+        _LOGGER.debug("Retrieved %d ordered items from entry_id %s", len(items), entry_id)
         return result
     
     async def handle_get_file_metadata(call):
@@ -354,11 +456,12 @@ def _register_services(hass: HomeAssistant):
         file_path = call.data["file_path"]
         is_favorite = call.data.get("is_favorite", True)
         
-        _LOGGER.info("Marking file as favorite: %s (favorite=%s)", file_path, is_favorite)
+        _LOGGER.debug("🔍 mark_favorite called: path='%s', is_favorite=%s", file_path, is_favorite)
         
         try:
             # Update database
-            await cache_manager.update_favorite(file_path, is_favorite)
+            db_success = await cache_manager.update_favorite(file_path, is_favorite)
+            _LOGGER.debug("🔍 Database update result: %s", db_success)
             
             # Write rating to file metadata
             # Rating 5 = favorite, Rating 0 = unfavorited
@@ -366,22 +469,28 @@ def _register_services(hass: HomeAssistant):
             
             # Determine file type to use appropriate parser
             file_ext = Path(file_path).suffix.lower()
+            _LOGGER.debug("🔍 File extension: %s, rating to write: %d", file_ext, rating)
+            
             if file_ext in {'.jpg', '.jpeg', '.png', '.tiff', '.tif', '.heic'}:
+                _LOGGER.debug("🔍 Calling ExifParser.write_rating for: %s", file_path)
                 success = await hass.async_add_executor_job(
                     ExifParser.write_rating, file_path, rating
                 )
+                _LOGGER.debug("🔍 ExifParser.write_rating result: %s", success)
             elif file_ext in {'.mp4', '.m4v', '.mov'}:
+                _LOGGER.debug("🔍 Calling VideoMetadataParser.write_rating for: %s", file_path)
                 success = await hass.async_add_executor_job(
                     VideoMetadataParser.write_rating, file_path, rating
                 )
+                _LOGGER.debug("🔍 VideoMetadataParser.write_rating result: %s", success)
             else:
                 success = False
                 _LOGGER.warning("Unsupported file type for rating: %s", file_ext)
             
             if success:
-                _LOGGER.debug("Wrote rating=%d to %s", rating, file_path)
+                _LOGGER.info("✅ Wrote rating=%d to %s", rating, file_path)
             else:
-                _LOGGER.warning("Failed to write rating to %s (database updated)", file_path)
+                _LOGGER.warning("❌ Failed to write rating to %s (database updated=%s)", file_path, db_success)
             
             return {
                 "file_path": file_path,
@@ -639,6 +748,14 @@ def _register_services(hass: HomeAssistant):
         SERVICE_GET_RANDOM_ITEMS,
         handle_get_random_items,
         schema=SERVICE_GET_RANDOM_ITEMS_SCHEMA,
+        supports_response=SupportsResponse.ONLY,
+    )
+    
+    hass.services.async_register(
+        DOMAIN,
+        SERVICE_GET_ORDERED_FILES,
+        handle_get_ordered_files,
+        schema=SERVICE_GET_ORDERED_FILES_SCHEMA,
         supports_response=SupportsResponse.ONLY,
     )
     
